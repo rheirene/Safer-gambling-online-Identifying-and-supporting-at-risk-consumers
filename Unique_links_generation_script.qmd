@@ -1,0 +1,167 @@
+---
+title: "Unique links generation script"
+author: "Rob Heirene"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    toc: true
+    code-summary: "Show code"
+    code-tools: true
+---
+
+## Preamble
+
+The purpose of this script is to assist in generating and sharing unique links for participants to complete a Qualtrics survey in our project with the overall title "Safer gambling online: Identifying and supporting at-risk consumers". The OSF page for this project can be found [here](https://osf.io/5at3q/).
+
+It also includes some example code used to illustrate how we will create dummy email address for participants that we include in our preregistration.
+
+### load required packages
+
+```{r results = FALSE, message = FALSE}
+#| code-summary: "Setup code"
+
+library(tidyverse)
+library(gt)
+library(readxl)
+```
+
+### Illustrative code for preregistration
+
+The below code is purely for the purposes of illustrating how we will create email addresses for the customers provided by an online gambling operator that will be used in the contact list for Qualtrics to generate unique survey invitation links.
+
+```{r}
+# create dummy customer IDs:
+dataset <- tibble(CustomerID = c(2029030,
+230000,
+233289320))
+
+# append mail identifier for inclusion in Qualtrics "contact list":
+dataset %>% 
+  mutate(Email = paste0(CustomerID, "@gmail.com"))
+
+```
+
+We can also create some dummy links here to show how they may look once qualtrics has generated them along with the other variables in the dataset (this is meant to be an example and not representative of how the links will actually look):
+
+```{r}
+
+# Repeat process, adding unique link and tabling outcomes (this is purely for demonstrative purposes in the preregistration and not how unique links are actually generated):
+dataset %>%
+  mutate(Email = paste0(CustomerID, "@gmail.com")) %>% 
+  mutate(unique_link = paste0("https:/", CustomerID, "/qualtrics_survey_university_of_sydney.com")) %>% 
+  gt()
+```
+
+### Code actually used to support unique link generation
+
+Okay, so the client list the operator has provided is in Excel spreadsheet format with three sheets. The first contains the client IDs for all customers flagged by their risk detection system, the second the client IDs for the randomly selected match sample not identified by the risk detection system, and the third contains details of the code used to filter customers according to our eligibility criteria and randomly select them.
+
+Let's start by loading in the first two sheets and taking a quick look at them (the output is hidden for to protect the anonymity of customers):
+
+```{r results=FALSE}
+clients_1 <- read_excel("filepath", sheet = "Portal")
+
+clients_1
+
+clients_2 <- read_excel("filepath", sheet = "Control")
+
+clients_2
+
+```
+
+Okay, now let's quickly count the number of customers in each of these datasets to check that there is a 20:80 ratio of at risk to not at risk customers.
+
+```{r}
+n_distinct(clients_1$CLIENT_ID) 
+
+n_distinct(clients_2$CLIENT_ID)
+```
+
+These numbers are approximately correct and the minor increase in the second/not at risk group is not worth debating, especially given that our goal was to maximise the number of people invited to the survey.
+
+Now let's combine these two datasets and then prepare the data for uploading to Qualtrics for unique link generation by creating the dummy email address for all customers and putting the customer ID in two separate columns with variable names recognised by Qualtrics (this is to ensure that we capture customer ID in survey responses):
+
+```{r results=FALSE}
+all_clients <- bind_rows(clients_1,
+          clients_2) %>%
+  mutate(Email = paste0(CLIENT_ID, "@gmail.com")) %>% 
+  rename(ExternalDataReference = CLIENT_ID) %>% # Make customer ID label recognised by QuAltrics
+  mutate(FirstName = ExternalDataReference) # Make customer ID label recognised by QuAltrics
+```
+
+Now we need to split customers by their brand/gambling site, so that we can send them separate surveys:
+
+```{r}
+NEDS_customers <- all_clients %>% 
+  filter(BRAND == "Neds") %>% 
+rename(LastName = BRAND) # Make brand-name label recognised by Qualtrics
+
+Ladbrokes_customers <- all_clients %>% 
+  filter(BRAND == "Ladbrokes") %>% 
+rename(LastName = BRAND) # Make brand-name label recognised by Qualtrics
+
+```
+
+Finally, we can write these to .CSV files for uploading to Qualtrics contact list feature (which is then used to generate unique invitation links to surveys).
+
+```{r}
+
+write.csv(NEDS_customers, "filepath", row.names=FALSE)
+
+write.csv(Ladbrokes_customers, "filepath", row.names=FALSE)
+
+```
+
+### Post-link generation
+
+I have now generated unique links for both customer data sets in Qualtrics.
+
+Let's now check there is a unique link for every customer included in the original datasets:
+
+```{r}
+
+# Operator 1:
+NEDS_unique_links_data <- read.csv("filepath")
+
+names(NEDS_unique_links_data)
+
+# Check unique number of customers in the original data set for this operator:
+n_distinct(NEDS_customers$ExternalDataReference)
+
+# Now check unique number of cuustomers in the unique links to dataaset to check we have captured them all:
+
+n_distinct(NEDS_unique_links_data$External.Data.Reference) # **It should be one more than the original data set, as I added a dummy/test person to test the linking process.**
+
+
+
+
+# Operator 2:
+ladbrokes_unique_links_data <- read.csv("filepath")
+
+names(ladbrokes_unique_links_data)
+
+# Check unique number of customers in the original data set for this operator:
+n_distinct(Ladbrokes_customers$ExternalDataReference)
+
+# Now check unique number of cuustomers in the unique links to dataaset to check we have captured them all:
+
+n_distinct(ladbrokes_unique_links_data$External.Data.Reference) # **It should be one more than the original data set, as I added a dummy/test person to test the linking process.**
+
+
+```
+
+Now, we'll prepare the survey links datasets according to the operator preferences to ensure the process of disseminating them is as smooth and speedy as possible.
+
+```{r}
+unique_survey_links_USyd_2024 <- bind_rows(NEDS_unique_links_data,
+          ladbrokes_unique_links_data) %>% 
+  filter(Email != "test1@gmail.com") %>% # Remove test/dummy person
+  select(BRAND = Last.Name,
+         clientID = External.Data.Reference,
+         uniqueLink = Link) # Isolate and rename relevant columns as per operator preferences
+
+
+# Write final unique links dataset to a .csv file for sharing with the operator:
+write.csv(unique_survey_links_USyd_2024, "filepathv", row.names=FALSE)
+
+```

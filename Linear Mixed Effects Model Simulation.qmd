@@ -1,0 +1,399 @@
+---
+author: "Robert Heirene"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+title: "LMEM Simulation"
+format: html
+editor: visual
+---
+
+## Preamble
+
+The purpose of this script is to illustrate the analysis code we will use for a study with the preliminary title "Impact of personalised feedback on problem gambling scores on gambling behaviour". This is a sample study within a project with the overall title "Safer gambling online: Identifying and supporting at-risk consumers". The OSF page for this study can be found [here](https://osf.io/m28yz/) and for the overall project project [here](https://osf.io/5at3q/).
+
+### load required packages
+
+Install and load the groundhog package to ensure consistency of the package versions used here:
+
+```{r message=FALSE, results=FALSE}
+#| code-fold: true
+#| code-summary: "Show set-up code"
+
+# install.packages("groundhog") # Install
+
+library(groundhog) # Load
+
+# List desired packages:
+packages <- c('tidyverse', # Clean, organise, and visualise data
+              'lme4', # Run linear mixed effects models
+              'lmerTest', # Compute t-values for lmer
+              'Matrix',  # Supports modelling
+              "performance", # Perform diagnostic checks for models
+              "see", # Required for model_check() function from above package to work
+              "lsmeans", # Compute least square means for LMEM fixed factors and enable contrast between them.
+              "pbkrtest", # Support functions of the above package
+              "bestNormalize", # Find the best transformation for skewed variables
+              "gt", # Table outcomes
+              "patchwork", # Assemble/combine plots
+              'sysfonts', # Special fonts for figures
+              'showtext' # Special fonts for figures
+              ) 
+
+
+# Load desired package with versions specific to project start date:
+groundhog.library(packages, "2023-12-29") 
+
+# Load new font for figures/graphs
+font_add_google("Poppins")
+showtext_auto()
+```
+
+Save the features for a plot theme:
+
+```{r message=FALSE}
+
+# Save new theme for figures/graphs.This will determine the layout, presentation, font type and font size used in all data visualisations presented here:
+plot_theme<- theme_classic() +
+  theme(
+    text=element_text(family="Poppins"),
+    plot.title = element_text(hjust = 0.5, size = 15),
+    plot.subtitle = element_text(hjust = 0.5, size = 13),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 13),
+    plot.caption = element_text(size = 10),
+    legend.title=element_text(size=12), 
+    legend.text=element_text(size=11)
+  ) 
+
+
+```
+
+## Data simulation
+
+Simulate a dataset that will resemble our data:
+
+```{r message=FALSE}
+set.seed(123) # For reproducibility
+
+# Number of participants
+n <- 300
+
+# Generate dummy data with PGSI groupings and pre and post intervention outcome variables:
+dummy_data <- data.frame(
+  participant_id = 1:n,
+  intervention = sample(c("Feedback", "No Feedback"), n, replace = TRUE),
+  PGSI_score = sample(c("No Risk", "Low Risk", "Moderate Risk", "High Risk"), n, replace = TRUE),
+  pre_mean_stake = abs(rnorm(n, mean = 164.3, sd = 957)),  
+  post_mean_stake = abs(rnorm(n, mean = 140.3, sd = 957)),
+  setting = sample(c("Operator 1", "Operator 2"), n, replace = TRUE))  # Add operator
+
+
+# Adjust post-intervention behavior based on intervention and PGSI score then create change in outcome variable
+dummy_data <- dummy_data %>%
+  mutate(post_mean_stake = case_when(
+    intervention == "Feedback" & PGSI_score == "High Risk" ~ post_mean_stake * 0.85,
+    intervention == "Feedback" & PGSI_score == "Moderate Risk" ~ post_mean_stake * 0.95,
+    intervention == "Feedback" & PGSI_score == "Low Risk" ~ post_mean_stake * 1.2,
+    intervention == "Feedback" & PGSI_score == "No Risk" ~ pre_mean_stake*1.01,
+    intervention == "No Feedback" ~ pre_mean_stake,
+    TRUE ~ post_mean_stake
+  )) 
+
+# create a dataset for testing hypotheses one through three that excludes the no risk group
+
+dummy_data_H1to3  <-  dummy_data %>%
+  filter(PGSI_score != "No Risk" ) 
+
+# create a dataset for testing hypothesis 4 that only includes the no risk group
+
+dummy_data_H4  <-  dummy_data %>%
+  filter(PGSI_score == "No Risk" ) 
+```
+
+Ensure the reference groups for factors/categorical variables are appropriately set:
+
+```{r message=FALSE}
+# for hypotheses one through three:
+dummy_data_H1to3$intervention <- as.factor(dummy_data_H1to3$intervention)
+dummy_data_H1to3$intervention <- relevel(dummy_data_H1to3$intervention, ref = "No Feedback")
+
+dummy_data_H1to3$PGSI_score <- as.factor(dummy_data_H1to3$PGSI_score)
+dummy_data_H1to3$PGSI_score <- relevel(dummy_data_H1to3$PGSI_score, ref = "Low Risk")
+
+# Reorder the levels of PGSI_score
+dummy_data_H1to3$PGSI_score <- factor(dummy_data_H1to3$PGSI_score, 
+                                        levels = c("Low Risk", "Moderate Risk", "High Risk"))
+
+# four hypothesis 4:
+dummy_data_H4$intervention <- as.factor(dummy_data_H4$intervention)
+dummy_data_H4$intervention <- relevel(dummy_data_H4$intervention, ref = "No Feedback")
+
+dummy_data_H4$PGSI_score <- as.factor(dummy_data_H4$PGSI_score)
+dummy_data_H4$PGSI_score <- relevel(dummy_data_H4$PGSI_score, ref = "No Risk")
+
+```
+
+## Run model
+
+```{r message=FALSE}
+model<- lmerTest::lmer(post_mean_stake ~ intervention * PGSI_score + pre_mean_stake + (1|setting),  # Nesting participants within setting 
+             data = dummy_data_H1to3)
+
+# Summarise & present model outcomes: 
+model_summary_mean_stake <- summary(model, correlation=TRUE)
+
+model_summary_mean_stake
+
+```
+
+Perform model diagnostics:
+
+```{r message=FALSE}
+
+check_model(model)
+
+# If problems with model diagnostics, find best transformation for skewed continuous variables:
+data_norm<-bestNormalize(dummy_data_H1to3$pre_mean_stake, 
+                         allow_orderNorm = T
+                         )
+
+BNobject <- bestNormalize(dummy_data_H1to3$pre_mean_stake)
+
+```
+
+If the model diagnostics are concerning, then the preregistered changes will be undertaken here (i.e., to variable removal/transformation) and a new model created and used for subsequent outputs from this point on.
+
+Extract model coefficients for tabling later on:
+
+```{r message=FALSE}
+model_summary_mean_stake_coefficients<- as.data.frame(model_summary_mean_stake$coefficients) %>%
+
+  rownames_to_column(var = "Factor") %>%
+  as_tibble()
+
+
+model_summary_mean_stake_coefficients %>%
+  rename("p" = 6,
+         "SE" = 3) %>%
+ mutate(across(2:5, ~ round(., digits = 2))) %>%
+  mutate(p = round(p, 3)) %>%
+  gt() %>% 
+   tab_header(
+    title = md("**Linear Mixed Effects Model Output: Mean Stake**")) 
+
+```
+
+Check overall model performance:
+
+```{r message=FALSE}
+model_performance(model)
+
+```
+
+Now perform comparisons between PGSI groups using the lsmeans package:
+
+```{r message=FALSE}
+
+lsm_mean_stake <- lsmeans(model, ~intervention*PGSI_score) # Compute least square means for each PGSI score across both intervention groups.
+
+
+lsm_mean_stake_overall <- as.data.frame(lsm_mean_stake) %>%
+  group_by(intervention) %>%
+   summarise_at(vars(2:6), mean) %>%
+   as_tibble() %>%
+  full_join(lsm_mean_stake, copy = TRUE)  %>% # Compute least square means for both intervention groups irrespective of PSI score. I double checked that this method produces almost identical outputs to when using expand.grid and then predict ()
+mutate(PGSI_score  = case_when(
+                               is.na(PGSI_score)~ "All",
+                               TRUE~PGSI_score))
+
+
+as.data.frame(lsm_mean_stake_overall) %>%
+  gt() %>% 
+   tab_header(
+    title = md("**Least Square Means: Mean Stake**")) 
+
+mean_stake_lsm_contrasts <- contrast(lsm_mean_stake, interaction = "pairwise")
+
+as.data.frame(mean_stake_lsm_contrasts) %>%
+  mutate(across(3:7, ~ round(., digits = 2))) %>%
+  gt() %>% 
+   tab_header(
+    title = md("**Impact of the intervention between the PGSI risk groups: Mean stake**")) 
+
+```
+
+### Plot predictions
+
+Make plot:
+
+```{r}
+
+# Reorder the levels of PGSI_score
+lsm_mean_stake_overall$PGSI_score <- factor(lsm_mean_stake_overall$PGSI_score, 
+                                        levels = c("All", "Low Risk", "Moderate Risk", "High Risk"))
+
+lsm_mean_stake_overall_plot  <-  lsm_mean_stake_overall %>%
+ggplot(aes(x = PGSI_score, y = lsmean, 
+            group = intervention, color = intervention)) +
+  geom_point(size = 4, position = position_dodge(width = 0.7)) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), linewidth = 1, width = 0.25, position = position_dodge(width = 0.7)) +
+  # geom_point(data = dummy_data_H1to3, aes(x = PGSI_score, y = change_in_mean_stake, group = intervention),
+  #            color = "gray", size = 2, alpha = 0.3, position = position_dodge(width = 1.2)) +
+  geom_hline(yintercept = 0, color = "gray") +  # Add horizontal line at zero for easier Interpretation
+   geom_vline(xintercept = 1.5, linewidth = 0.7, color = "black") +  # Add vertical line to segregate the aggregate from PGSI groups
+  annotate("rect", xmin = -Inf, xmax = 1.5, ymin = 0, ymax = Inf, fill = "gray", alpha = 0.2) +
+  scale_color_manual(values = c("Feedback" = "#1a80bb", "No Feedback" = "#ea801c")) +
+  labs(title = "Low to High Risk PGSI Groups",
+       y = "Mean Stake",
+       x = "PGSI score",
+       color = "") +
+  plot_theme +
+  theme(plot.title = element_text(hjust = 0.5, size = 13))
+
+lsm_mean_stake_overall_plot
+```
+
+### SESOI test
+
+For testing H4.
+
+Steps followed here to test against a SESOI from a lmem output are from Peder Isager's blog: <https://pedermisager.org/blog/mixed_model_equivalence/>
+
+```{r}
+
+model_H4<- lmerTest::lmer(post_mean_stake ~ intervention + pre_mean_stake + (1|setting),  # Nesting participants within setting 
+             data = dummy_data_H4)
+
+# Summarise & present model outcomes: 
+model_summary_mean_stake_H4 <- summary(model_H4, correlation=TRUE)
+
+model_summary_mean_stake_H4
+# Boundaries to test against
+bound_l <-  -5  # SESOI bound Lower
+bound_u <-  5  # SESOI bound Upper
+
+lower <- contest1D(model_H4, c(0, 1,0), confint=TRUE, rhs=bound_l, level = 0.9) # get t value for test against lower bound
+
+upper <- contest1D(model_H4, c(0, 1,0), confint=TRUE, rhs=bound_u, level = 0.9) # get t value for test against upper bound
+
+lower
+upper
+
+pt(lower$`t value`, lower$df, lower.tail = FALSE)  # test against lower bound
+
+pt(upper$`t value`, upper$df, lower.tail = TRUE)  # p-value for test against bound as a one-tailed test
+
+```
+
+Now compute lsmeans for this model:
+
+```{r}
+
+lsm_mean_stake_H4 <- lsmeans(model_H4, ~intervention)  %>% # Compute least square means for each intervention group.
+as_tibble()
+
+as.data.frame(lsm_mean_stake_H4) %>%
+  gt() %>% 
+   tab_header(
+    title = md("**Least Square Means: Mean Stake for no-risk PGSI participants**")) 
+```
+
+And plot them with the main plot for this outcome:
+
+```{r}
+  
+
+lower_sesoi_bound  <-  lsm_mean_stake_H4$lsmean[1] + bound_l
+upper_sesoi_bound  <-  lsm_mean_stake_H4$lsmean[1] + bound_u
+
+lsm_mean_stake_H4_plot   <-   lsm_mean_stake_H4 %>%
+  as_tibble() %>%
+  mutate(PGSI_score = as.character("Low risk")) %>%
+ggplot(aes(y = lsmean, x = PGSI_score,
+            group = intervention, color = intervention)) +
+  geom_point(size = 4, position = position_dodge(width = 0.7)) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), linewidth = 1, width = 0.25, position = position_dodge(width = 0.7)) +
+  scale_color_manual(values = c("Feedback" = "#1a80bb", "No Feedback" = "#ea801c")) +
+  labs(title = "No-Risk PGSI Group",
+       y = "",
+       x = " ",
+       color = "") +
+      geom_hline(yintercept = lower_sesoi_bound, linetype = "dashed", color = "black") +  
+     geom_hline(yintercept = upper_sesoi_bound, linetype = "dashed", color = "black") +
+     annotate("rect", xmin = -Inf, xmax = Inf, ymin = lower_sesoi_bound, ymax = upper_sesoi_bound, fill = "gray", alpha = 0.2) +
+    annotate("text", x = 0.5, y = lower_sesoi_bound+0.4, label = "Lower equivalence bound (-$5)", hjust = -0.1, vjust = 0.5, color = "black", size = 3) +
+     annotate("text", x = 0.5, y = upper_sesoi_bound+-.4, label = "Upper equivalence bound ($5)", hjust = -0.1, vjust = 0.5, color = "black", size = 3) +
+  plot_theme+
+  theme(plot.title = element_text(hjust = 0.5, size = 13))
+
+lsm_mean_stake_overall_plot + lsm_mean_stake_H4_plot +
+  plot_layout(guides = 'collect', widths = unit(c(1, 5), c("null", "cm"))) +
+  plot_annotation(title = 'Post-intervention predicted average stake',
+                  theme = theme(plot.title = element_text(size = 18))) & 
+theme(text = element_text('Poppins'))
+```
+
+#### Verify lsmeans
+
+To check the predicted means calculated using the lsmeans package, we'll Use the "expand.grid()" function to create a comprehensive dataset of data points that includes not only the observed combinations in the original data, but every potential combination of all predictor variables present in the data (i.e., intervention, setting, PGSI score, and pre-intervention outcome value)
+
+```{r message=FALSE}
+
+new_data <- expand.grid(intervention = levels(dummy_data_H1to3$intervention),
+                        PGSI_score = levels(dummy_data_H1to3$PGSI_score),
+                        setting = unique(dummy_data_H1to3$setting),
+                        pre_mean_stake = unique(dummy_data_H1to3$pre_mean_stake))
+```
+
+Now, using the model and our expanded dataset, predict average change in mean OUTCOME and compute standard errors:
+
+```{r message=FALSE}
+pred_with_se <- predict(model, # Model used to make predictions
+                        newdata = new_data, # Generate predictions based on new dataset
+                        re.form = NA, # ignore random effects
+                        se.fit= TRUE # Compute standard errors for predictions made with an lmer() model
+                        )
+
+# Add the predicted mean stake and the standard errors to new_data:
+new_data$pred_change_in_mean_stake <- pred_with_se$fit # Add average change predictions to dataset and label it "pred_change_in_mean_stake"
+
+new_data$se_mean_stake_change <- pred_with_se$se.fit  # Add standard errors for predictions to dataset and label the variable "se_mean_stake_change"
+
+```
+
+Calculate the confidence intervals for predictions that can be later used for error bars (95%)
+
+```{r message=FALSE}
+ci_mult <- qt(0.975, df = df.residual(model))  # Get the critical t-value for 95% CI
+
+new_data$ci_lower <- new_data$pred_change_in_mean_stake - ci_mult * new_data$se_mean_stake_change
+
+new_data$ci_upper <- new_data$pred_change_in_mean_stake + ci_mult * new_data$se_mean_stake_change
+
+```
+
+Summarize the data And produce aggregate scores forThe intervention groups regardless of previous I status (this is particularly important for verifying our average across these groups from lsmeans are accurate):
+
+```{r message=FALSE}
+agg_data_by_PGSI <- new_data %>%
+  group_by(intervention, PGSI_score) %>%
+  summarise(
+    avg_predicted_change = mean(pred_change_in_mean_stake),
+    se = mean(se_mean_stake_change),
+    ci_lower = mean(ci_lower),
+    ci_upper = mean(ci_upper)
+  )
+
+agg_data<- new_data %>%
+  group_by(intervention) %>%
+  summarise(
+    avg_predicted_change = mean(pred_change_in_mean_stake),
+    se = mean(se_mean_stake_change),
+    ci_lower = mean(ci_lower),
+    ci_upper = mean(ci_upper)
+  ) %>%
+  full_join(agg_data_by_PGSI) %>%
+mutate(PGSI_score = case_when(
+    is.na(PGSI_score) ~ "All",
+    TRUE ~ as.character(PGSI_score)
+  ))
+```

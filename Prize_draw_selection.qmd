@@ -1,0 +1,48 @@
+---
+title: "Prize Draw Selection"
+author: "Robert Heirene"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: html
+editor: visual
+---
+
+## Preamble
+
+The purpose of this script is to randomly select 20 participants who completed a Qualtrics survey for our project with the overall title "Safer gambling online: Identifying and supporting at-risk consumers". These randomly selected participants will receive a voucher for their participation. The OSF page for this project can be found [here](https://osf.io/5at3q/).
+
+```{r results = FALSE, message = FALSE}
+#| code-summary: "Setup code"
+
+library(tidyverse)
+```
+
+Read the data:
+
+```{r results = FALSE, message = FALSE}
+data  <-  read.csv("filepath") %>%
+as_tibble()
+```
+
+Isolate those with contact details:
+
+```{r results = FALSE, message = FALSE}
+data_filtered  <-  data %>%
+select(
+Q4_1, # name
+Q4_2, # email
+Q4_3)  %>%# phone number
+  mutate_all(~na_if(., "")) %>% # replace empty values with NA for easy filtering
+  filter(!is.na(Q4_2) | !is.na(Q4_3)) # Only keep rows where a participant HAS included either their phone number or email address
+```
+
+Randomly select 20 people for the vouchers:
+
+```{r results = FALSE, message = FALSE}
+random_sample <- data_filtered %>%
+  sample_n(20, replace = FALSE)
+
+
+random_sample
+
+write.csv(random_sample, "filepath")
+```
